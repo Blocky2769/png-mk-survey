@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>PNG MK Survey Results</title>
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&family=Young+Serif&display=swap">
+<link rel="stylesheet" href="style.css">
+<style>
+  .wrap { max-width: 920px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+  .tile { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .tile b { display: block; font-family: var(--display); font-size: 30px; font-weight: 400; font-variant-numeric: tabular-nums; }
+  .tile span { color: var(--muted); font-size: 14px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  .filters label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+  select, .filters input { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  .sec { font-family: var(--display); font-size: 22px; margin: 18px 0 0; border-bottom: 2px solid var(--gold); padding-bottom: 4px; }
+  .rows { display: grid; gap: 6px; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr) 140px 64px; gap: 10px; align-items: center; font-size: 15px; }
+  .row .track { height: 12px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .row .track span { display: block; height: 100%; background: var(--accent); }
+  .row .c { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .avg { font-size: 14px; color: var(--muted); }
+  .texts { display: grid; gap: 6px; max-height: 320px; overflow: auto; }
+  .texts p { margin: 0; padding: 8px 10px; background: var(--bg); border-radius: 6px; font-size: 15px; }
+  @media (max-width: 520px) { .row { grid-template-columns: minmax(0, 1fr) 70px 54px; } }
+</style>
+</head>
+<body>
+<header class="masthead"><div class="wrap"><p class="eyebrow">PNG MK Platform · Admin</p><h1>Survey results</h1></div><div class="bilum" aria-hidden="true"></div></header>
+<main class="wrap" id="app"></main>
+<script src="config.js"></script>
+<script src="questions.js"></script>
+<script>
+(() => {
+  const S = window.SURVEY, CFG = window.SURVEY_CONFIG, app = document.getElementById("app");
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const val = o => Array.isArray(o) ? o[0] : o, lab = o => Array.isArray(o) ? o[1] : o;
+  let n = 0; for (const s of S.sections) for (const q of s.qs) q.n = ++n;
+  let rows = [], filt = { link: "", livenow: "" };
+  const getKey = () => { try { return localStorage.getItem("pngmk-admin-key") || ""; } catch { return ""; } };
+  const setKey = k => { try { localStorage.setItem("pngmk-admin-key", k); } catch {} };
+
+  function askKey(msg) {
+    app.innerHTML = `<form class="panel" id="k"><p>Enter the results key to see live tallies.</p>
+      <input type="password" id="key" autocomplete="current-password" style="font:inherit;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)">
+      ${msg ? `<p class="err">${esc(msg)}</p>` : ""}<div class="nav"><span></span><button>Show results</button></div></form>`;
+    document.getElementById("k").onsubmit = e => { e.preventDefault(); const k = document.getElementById("key").value.trim(); setKey(k); fetchRows(k); };
+  }
+
+  async function fetchRows(key) {
+    app.innerHTML = `<p>Loading…</p>`;
+    try {
+      const r = await fetch(CFG.supabaseUrl + "/rest/v1/rpc/mk_survey_results", {
+        method: "POST", headers: { apikey: CFG.anonKey, Authorization: "Bearer " + CFG.anonKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ p_key: key }) });
+      if (!r.ok) { setKey(""); return askKey(r.status === 400 || r.status === 401 || r.status === 403 ? "That key didn't work." : "Couldn't load results (HTTP " + r.status + ")."); }
+      rows = await r.json(); render();
+    } catch { askKey("Couldn't reach the database. Check your connection."); }
+  }
+
+  const opts = (id) => { const q = S.sections.flatMap(s => s.qs).find(q => q.id === id); return q.o.map(o => `<option value="${esc(val(o))}">${esc(lab(o))}</option>`).join(""); };
+
+  function render() {
+    const R = rows.filter(r => (!filt.link || r.answers.link === filt.link) && (!filt.livenow || r.answers.livenow === filt.livenow));
+    const med = a => { if (!a.length) return 0; const s = [...a].sort((x, y) => x - y); return s[Math.floor(s.length / 2)]; };
+    const yes = (id, v) => R.filter(r => r.answers[id] === v).length;
+    const nps = R.map(r => r.answers.w_recommend).filter(v => typeof v === "number");
+    const npsScore = nps.length ? Math.round(100 * (nps.filter(v => v >= 9).length - nps.filter(v => v <= 6).length) / nps.length) : "–";
+    let html = `<div class="filters">
+      <label>Respondent type <select id="fl"><option value="">Everyone</option>${opts("link")}</select></label>
+      <label>Lives in <select id="fc"><option value="">Anywhere</option>${opts("livenow")}</select></label>
+      <button type="button" class="ghost" id="csv">Download CSV</button>
+      <button type="button" class="ghost" id="refresh">Refresh</button></div>
+      <div class="tiles">
+        <div class="tile"><b>${R.length}</b><span>responses${R.length !== rows.length ? ` (of ${rows.length})` : ""}</span></div>
+        <div class="tile"><b>${Math.round(med(R.map(r => r.duration_sec || 0)) / 60)} min</b><span>median time</span></div>
+        <div class="tile"><b>${yes("w_pilot", "Yes")}</b><span>want the pilot</span></div>
+        <div class="tile"><b>${yes("$_willing", "Yes")}</b><span>would pay</span></div>
+        <div class="tile"><b>${npsScore}</b><span>recommend score (−100 to 100)</span></div>
+        <div class="tile"><b>${R.filter(r => r.email).length}</b><span>left an email</span></div>
+      </div>`;
+    for (const s of S.sections) {
+      html += `<h2 class="sec">${esc(s.title)}</h2>`;
+      for (const q of s.qs) {
+        if (q.type === "email") continue;
+        const ans = R.map(r => r.answers[q.id]).filter(a => a != null && a !== "");
+        html += `<div class="q"><div class="label"><span class="num">Q${q.n}</span>${esc(q.t)}</div><div class="avg">${ans.length} answered</div>`;
+        if (q.type === "text") {
+          html += `<div class="texts">${ans.map(a => `<p>${esc(a)}</p>`).join("") || "<p>No answers yet.</p>"}</div>`;
+        } else {
+          const labels = q.type === "nps" ? Array.from({ length: 11 }, (_, i) => [i, String(i)])
+            : q.type === "scale" ? q.o.map((o, i) => [i + 1, `${i + 1} · ${o}`]) : q.o.map(o => [val(o), lab(o)]);
+          const counts = labels.map(([v]) => ans.filter(a => Array.isArray(a) ? a.includes(v) : a === v).length);
+          const max = Math.max(1, ...counts), base = Math.max(1, ans.length);
+          if (q.type === "scale" || q.type === "nps") { const avg = ans.reduce((a, b) => a + b, 0) / base; html += `<div class="avg">Average ${ans.length ? avg.toFixed(2) : "–"}</div>`; }
+          html += `<div class="rows">` + labels.map(([, l], i) =>
+            `<div class="row"><span>${esc(l)}</span><span class="track"><span style="width:${(counts[i] / max) * 100}%"></span></span><span class="c">${counts[i]} · ${Math.round(counts[i] / base * 100)}%</span></div>`).join("") + `</div>`;
+        }
+        html += `</div>`;
+      }
+    }
+    app.innerHTML = html;
+    const fl = document.getElementById("fl"), fc = document.getElementById("fc");
+    fl.value = filt.link; fc.value = filt.livenow;
+    fl.onchange = () => { filt.link = fl.value; render(); };
+    fc.onchange = () => { filt.livenow = fc.value; render(); };
+    document.getElementById("refresh").onclick = () => fetchRows(getKey());
+    document.getElementById("csv").onclick = () => downloadCsv(R);
+  }
+
+  function downloadCsv(R) {
+    const qs = S.sections.flatMap(s => s.qs).filter(q => q.type !== "email");
+    const cell = v => { const s = v == null ? "" : Array.isArray(v) ? v.join("; ") : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const lines = [["id", "created_at", "duration_sec", "email", ...qs.map(q => `Q${q.n} ${q.id}`)].map(cell).join(",")];
+    for (const r of R) lines.push([r.id, r.created_at, r.duration_sec, r.email, ...qs.map(q => r.answers[q.id])].map(cell).join(","));
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["﻿" + lines.join("\n")], { type: "text/csv" }));
+    a.download = "png-mk-survey-" + new Date().toISOString().slice(0, 10) + ".csv"; a.click();
+  }
+
+  getKey() ? fetchRows(getKey()) : askKey();
+})();
+</script>
+</body>
+</html>
